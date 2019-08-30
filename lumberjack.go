@@ -142,7 +142,6 @@ var (
 func (l *Logger) Write(p []byte) (n int, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	fmt.Println("HI")
 
 	writeLen := int64(len(p))
 	if writeLen > l.max() {
@@ -190,17 +189,6 @@ func (l *Logger) close() error {
 	}
 	err := l.file.Close()
 
-	// files, err := l.oldLogFiles()
-	// if err != nil {
-	// 	return err
-	// }
-
-	// fmt.Println(files)
-	// for _, file := range files {
-	// 	fmt.Println(file.timestamp, file.Size(), file.Name())
-	// }
-
-	// log.Fatal("end")
 	l.file = nil
 	return err
 }
@@ -251,7 +239,6 @@ func (l *Logger) openNew() error {
 		}
 
 		// this is a no-op anywhere but linux
-
 		if err := chown(name, l.Own); err != nil {
 			return err
 		}
@@ -268,6 +255,11 @@ func (l *Logger) openNew() error {
 	info, err = f.Stat()
 	if err != nil {
 		return fmt.Errorf("error getting log file info: %s", err)
+	}
+
+	// this is a no-op anywhere but linux
+	if err := chown(name, l.Own); err != nil {
+		return err
 	}
 
 	l.file = f
