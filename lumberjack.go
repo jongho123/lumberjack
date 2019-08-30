@@ -421,7 +421,7 @@ func (l *Logger) millRunOnce() error {
 	}
 	for _, f := range compress {
 		fn := filepath.Join(l.dir(), f.Name())
-		errCompress := compressLogFile(fn, fn+compressSuffix)
+		errCompress := l.compressLogFile(fn, fn+compressSuffix)
 		if err == nil && errCompress != nil {
 			err = errCompress
 		}
