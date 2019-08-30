@@ -36,8 +36,9 @@ import (
 )
 
 const (
-	backupTimeFormat = "2006-01-02T15-04-05.000"
+	backupTimeFormat = "2006-01-02"
 	compressSuffix   = ".gz"
+	timezone         = "Asia/Seoul"
 	defaultMaxSize   = 100
 )
 
@@ -107,9 +108,12 @@ type Logger struct {
 	// using gzip. The default is not to perform compression.
 	Compress bool `json:"compress" yaml:"compress"`
 
-	size int64
-	file *os.File
-	mu   sync.Mutex
+	TotalSize int `json:"totalsize" yaml:"totalsize"`
+
+	size    int64
+	lastMod time.Time
+	file    *os.File
+	mu      sync.Mutex
 
 	millCh    chan bool
 	startMill sync.Once
@@ -126,6 +130,8 @@ var (
 	// variable so tests can mock it out and not need to write megabytes of data
 	// to disk.
 	megabyte = 1024 * 1024
+
+	location, _ = time.LoadLocation(timezone)
 )
 
 // Write implements io.Writer.  If a write would cause the log file to be larger
@@ -155,6 +161,13 @@ func (l *Logger) Write(p []byte) (n int, err error) {
 		}
 	}
 
+	// diff day
+	if l.lastMod.Format(backupTimeFormat) != currentTime().In(location).Format(backupTimeFormat) {
+		if err := l.rotate(); err != nil {
+			return 0, err
+		}
+	}
+
 	n, err = l.file.Write(p)
 	l.size += int64(n)
 
@@ -174,6 +187,18 @@ func (l *Logger) close() error {
 		return nil
 	}
 	err := l.file.Close()
+
+	// files, err := l.oldLogFiles()
+	// if err != nil {
+	// 	return err
+	// }
+
+	// fmt.Println(files)
+	// for _, file := range files {
+	// 	fmt.Println(file.timestamp, file.Size(), file.Name())
+	// }
+
+	// log.Fatal("end")
 	l.file = nil
 	return err
 }
@@ -236,8 +261,15 @@ func (l *Logger) openNew() error {
 	if err != nil {
 		return fmt.Errorf("can't open new logfile: %s", err)
 	}
+
+	info, err = f.Stat()
+	if err != nil {
+		return fmt.Errorf("error getting log file info: %s", err)
+	}
+
 	l.file = f
 	l.size = 0
+	l.lastMod = info.ModTime().In(location)
 	return nil
 }
 
@@ -254,7 +286,7 @@ func backupName(name string, local bool) string {
 		t = t.UTC()
 	}
 
-	timestamp := t.Format(backupTimeFormat)
+	timestamp := t.In(location).Format(backupTimeFormat)
 	return filepath.Join(dir, fmt.Sprintf("%s-%s%s", prefix, timestamp, ext))
 }
 
@@ -277,6 +309,10 @@ func (l *Logger) openExistingOrNew(writeLen int) error {
 		return l.rotate()
 	}
 
+	if info.ModTime().In(location).Format(backupTimeFormat) != currentTime().In(location).Format(backupTimeFormat) {
+		return l.rotate()
+	}
+
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		// if we fail to open the old log file for some reason, just ignore
@@ -285,6 +321,7 @@ func (l *Logger) openExistingOrNew(writeLen int) error {
 	}
 	l.file = file
 	l.size = info.Size()
+	l.lastMod = info.ModTime().In(location)
 	return nil
 }
 
@@ -335,7 +372,7 @@ func (l *Logger) millRunOnce() error {
 	}
 	if l.MaxAge > 0 {
 		diff := time.Duration(int64(24*time.Hour) * int64(l.MaxAge))
-		cutoff := currentTime().Add(-1 * diff)
+		cutoff := currentTime().In(location).Add(-1 * diff)
 
 		var remaining []logInfo
 		for _, f := range files {
@@ -345,6 +382,23 @@ func (l *Logger) millRunOnce() error {
 				remaining = append(remaining, f)
 			}
 		}
+		files = remaining
+	}
+
+	if l.TotalSize > 0 {
+		limitSize := int64(l.TotalSize) * int64(megabyte)
+		currentSize := int64(0)
+
+		var remaining []logInfo
+		for _, f := range files {
+			currentSize = currentSize + f.Size()
+			if currentSize <= limitSize {
+				remaining = append(remaining, f)
+			} else {
+				remove = append(remove, f)
+			}
+		}
+
 		files = remaining
 	}
 
@@ -438,7 +492,8 @@ func (l *Logger) timeFromName(filename, prefix, ext string) (time.Time, error) {
 		return time.Time{}, errors.New("mismatched extension")
 	}
 	ts := filename[len(prefix) : len(filename)-len(ext)]
-	return time.Parse(backupTimeFormat, ts)
+
+	return time.ParseInLocation(backupTimeFormat, ts, location)
 }
 
 // max returns the maximum size in bytes of log files before rolling.
