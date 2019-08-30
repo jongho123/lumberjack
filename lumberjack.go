@@ -108,7 +108,8 @@ type Logger struct {
 	// using gzip. The default is not to perform compression.
 	Compress bool `json:"compress" yaml:"compress"`
 
-	TotalSize int `json:"totalsize" yaml:"totalsize"`
+	TotalSize int    `json:"totalsize" yaml:"totalsize"`
+	Own       string `json:"own" yaml:"own"`
 
 	size    int64
 	lastMod time.Time
@@ -141,6 +142,7 @@ var (
 func (l *Logger) Write(p []byte) (n int, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	fmt.Println("HI")
 
 	writeLen := int64(len(p))
 	if writeLen > l.max() {
@@ -249,7 +251,8 @@ func (l *Logger) openNew() error {
 		}
 
 		// this is a no-op anywhere but linux
-		if err := chown(name, info); err != nil {
+
+		if err := chown(name, l.Own); err != nil {
 			return err
 		}
 	}
@@ -520,7 +523,7 @@ func (l *Logger) prefixAndExt() (prefix, ext string) {
 
 // compressLogFile compresses the given log file, removing the
 // uncompressed log file if successful.
-func compressLogFile(src, dst string) (err error) {
+func (l *Logger) compressLogFile(src, dst string) (err error) {
 	f, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %v", err)
@@ -532,7 +535,7 @@ func compressLogFile(src, dst string) (err error) {
 		return fmt.Errorf("failed to stat log file: %v", err)
 	}
 
-	if err := chown(dst, fi); err != nil {
+	if err := chown(dst, l.Own); err != nil {
 		return fmt.Errorf("failed to chown compressed log file: %v", err)
 	}
 
