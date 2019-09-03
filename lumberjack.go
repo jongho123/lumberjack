@@ -156,14 +156,15 @@ func (l *Logger) Write(p []byte) (n int, err error) {
 		}
 	}
 
-	if l.size+writeLen > l.max() {
-		if err := l.rotate(); err != nil {
+	// diff day
+	today := currentTime().In(location)
+	if l.lastMod.Format(backupTimeFormat) != today.Format(backupTimeFormat) {
+		if err := l.dailyRotate(); err != nil {
 			return 0, err
 		}
 	}
 
-	// diff day
-	if l.lastMod.Format(backupTimeFormat) != currentTime().In(location).Format(backupTimeFormat) {
+	if l.size+writeLen > l.max() {
 		if err := l.rotate(); err != nil {
 			return 0, err
 		}
@@ -211,7 +212,19 @@ func (l *Logger) rotate() error {
 	if err := l.close(); err != nil {
 		return err
 	}
-	if err := l.openNew(); err != nil {
+	if err := l.openNew(false); err != nil {
+		return err
+	}
+	l.mill()
+	return nil
+}
+
+// dailyRotate
+func (l *Logger) dailyRotate() error {
+	if err := l.close(); err != nil {
+		return err
+	}
+	if err := l.openNew(true); err != nil {
 		return err
 	}
 	l.mill()
@@ -220,7 +233,7 @@ func (l *Logger) rotate() error {
 
 // openNew opens a new log file for writing, moving any old log file out of the
 // way.  This methods assumes the file has already been closed.
-func (l *Logger) openNew() error {
+func (l *Logger) openNew(daily bool) error {
 	err := os.MkdirAll(l.dir(), 0755)
 	if err != nil {
 		return fmt.Errorf("can't make directories for new logfile: %s", err)
@@ -233,7 +246,7 @@ func (l *Logger) openNew() error {
 		// Copy the mode off the old logfile.
 		mode = info.Mode()
 		// move the existing file
-		newname := backupName(name, l.LocalTime)
+		newname := backupName(name, l.LocalTime, daily)
 		if err := os.Rename(name, newname); err != nil {
 			return fmt.Errorf("can't rename log file: %s", err)
 		}
@@ -271,7 +284,7 @@ func (l *Logger) openNew() error {
 // backupName creates a new filename from the given name, inserting a timestamp
 // between the filename and the extension, using the local time if requested
 // (otherwise UTC).
-func backupName(name string, local bool) string {
+func backupName(name string, local bool, daily bool) string {
 	dir := filepath.Dir(name)
 	filename := filepath.Base(name)
 	ext := filepath.Ext(filename)
@@ -281,7 +294,13 @@ func backupName(name string, local bool) string {
 		t = t.UTC()
 	}
 
-	timestamp := t.In(location).Format(backupTimeFormat)
+	kst := t.In(location)
+	if daily {
+		// yesterday
+		kst = kst.Add(-1 * time.Duration(int64(24 * time.Hour)))
+	}
+
+	timestamp := kst.Format(backupTimeFormat)
 	return filepath.Join(dir, fmt.Sprintf("%s-%s%s", prefix, timestamp, ext))
 }
 
@@ -294,7 +313,7 @@ func (l *Logger) openExistingOrNew(writeLen int) error {
 	filename := l.filename()
 	info, err := os_Stat(filename)
 	if os.IsNotExist(err) {
-		return l.openNew()
+		return l.openNew(false)
 	}
 	if err != nil {
 		return fmt.Errorf("error getting log file info: %s", err)
@@ -312,7 +331,7 @@ func (l *Logger) openExistingOrNew(writeLen int) error {
 	if err != nil {
 		// if we fail to open the old log file for some reason, just ignore
 		// it and open a new log file.
-		return l.openNew()
+		return l.openNew(false)
 	}
 	l.file = file
 	l.size = info.Size()
